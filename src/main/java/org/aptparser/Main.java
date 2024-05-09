@@ -35,16 +35,38 @@ public class Main {
         linkDepends(PACKAGES);
 
         HashMap<String, AptPackage> java = new HashMap<String, AptPackage>();
-        AptPackage jreHeadless = PACKAGES.get("default-jre-headless amd64");
         HashSet<AptPackage> javaEcosystem = new HashSet<AptPackage>();
-        fillRdeps(javaEcosystem, jreHeadless);
-        for (var p : jreHeadless._deps) {
-            fillRdeps(javaEcosystem, p);
+
+        String[] packages = new String[]{ "default-jre-headless", "default-jre", "default-jdk-headless", "default-jdk", "java-common"};
+        for (var root : packages ) {
+            AptPackage rootPackage = lookupPackage(PACKAGES, root);
+            fillRdeps(javaEcosystem, rootPackage);
         }
-        FileOutputStream fos = new FileOutputStream("result.csv");
-        for (var p : javaEcosystem) {
-            fos.write((p._name + "," + p._tags.get("Section")+ "\n").getBytes("UTF-8"));
+        try (FileOutputStream fos = new FileOutputStream("result.csv")) {
+            for (var p : javaEcosystem) {
+                HashSet<AptPackage> rdeps = new HashSet<AptPackage>();
+                fillSrcRdeps(rdeps, p);
+                fos.write((p._name + "," + p._tags.get("Section") + "," + rdeps.size() + "\n").getBytes("UTF-8"));
+            }
         }
+
+        try ( PrintWriter wr = new PrintWriter(new FileWriter("java.puml"))) {
+            wr.println("@startuml");
+            for (var p : javaEcosystem) {
+                wr.println("object " + p._name);
+            }
+
+            for (var p : javaEcosystem) {
+                for (var link : p._reverse_src_deps) {
+                    if (link == p)
+                        continue;
+                    wr.println(link._name  + "-->" + p._name);
+                }
+            }
+
+            wr.println("@enduml");
+        }
+
         System.out.println("Finished");
     }
 
@@ -62,6 +84,17 @@ public class Main {
             if (javaEcosystem.contains(rdep._source_package))
                 continue;
             fillRdeps(javaEcosystem, rdep);
+        }
+    }
+
+    private static void fillSrcRdeps(HashSet<AptPackage> javaEcosystem, AptPackage p) {
+        if (!p._isSource)
+            return;
+        javaEcosystem.add(p);
+        for (var rdep : p._reverse_src_deps) {
+            if (javaEcosystem.contains(rdep))
+                continue;
+            fillSrcRdeps(javaEcosystem, rdep);
         }
     }
 
@@ -101,12 +134,11 @@ public class Main {
             if (p != null)
                 return p;
         }
-        return null;
+        return db.get("src:" + name);
     }
 
     private static void linkDepends(HashMap<String, AptPackage> db) {
         for (var p : db.values()) {
-            String arch = p._tags.get("Architecture");
             ArrayList<String> dependFields = new ArrayList<String>();
             for (var field : new String[] { "Depends", "Build-Depends", "Build-Depends-Indep", "Build-Depends-Arch"})
             {
@@ -137,6 +169,8 @@ public class Main {
                     } else {
                         p._deps.add(dep);
                         dep._reverse_deps.add(p);
+                        if (dep._source_package != null & p._source_package != null)
+                            dep._source_package._reverse_src_deps.add(p._source_package);
                     }
                 }
             }
